@@ -348,17 +348,7 @@ fn determine_action(state: &State, direction: Direction) -> Option<Action> {
     }
   } else {
     // whatever to do when there's no active client
-
-    // TODO: allowing the previous workspace only is ~~most likely~~ incorrect
-    // as long as it's possible to travel through workspaces by number.
-    // Already: this check doesn't account for the ability to move the only window 
-    // on the workspace to the next one
-
-    if can_move && relative == -1 {
       Some(Action::Move(relative))
-    } else {
-      None
-    }
   }
 }
 
