@@ -239,38 +239,40 @@ impl State {
     }
   }
 
-  fn correct_dimensions(&mut self) {
-    // TODO: account for SmartGapsState.
-    // Also, that's incorrect: choosing
-    // inner or outer gaps depends
-    // on the position of the window
-    let delta_position = self.decorations.outer_gaps + self.decorations.border_size;
-    let delta_size = self.decorations.inner_gaps + delta_position;
-
-    self.clients
-         .iter_mut()
-         .for_each(|c| {
-           if let Some(workspace) = State::find_workspace_by_id(&self.workspaces, c.workspace_id) {
-             if workspace.client_addresses.len() > 1 {
-               c.top_left.0 -= delta_position;
-               c.top_left.1 -= delta_position;
-               c.width += delta_size;
-               c.height += delta_size;
-             }
-           };
-         });
-  }
-
   fn find_window_by_address(&self, address: &String) -> Option <&Client> {
     self.clients
       .iter()
       .find(|&c| &c.address == address)
   }
 
+  fn find_clients_on_workspace(&self, workspace_id: i16) -> Vec<&Client> {
+    self.clients
+      .iter()
+      .filter(|&c| c.workspace_id == workspace_id)
+      .collect()
+  }
+
   fn find_monitor_by_client(&self, client: &Client) -> Option <&Monitor> {
     self.monitors
       .iter()
       .find(|&m| m.id == client.monitor)
+  }
+
+  fn client_has_neighbours_in_direction(&self, client: &Client, direction: &Direction) -> bool {
+    let neighbours = self.find_clients_on_workspace(client.workspace_id);
+    let neighbour = neighbours
+                    .iter()
+                    .find(|&n| match direction {
+                                 Direction::Up    => n.top_left.1 < client.top_left.1,
+                                 Direction::Down  => n.top_left.1 > client.top_left.1,
+                                 Direction::Left  => n.top_left.0 < client.top_left.0,
+                                 Direction::Right => n.top_left.0 > client.top_left.0,
+                               }
+                    );
+    match neighbour {
+      Option::None => false,
+      Option::Some(_) => true
+    }
   }
 }
 
@@ -301,43 +303,7 @@ fn determine_action(state: &State, direction: Direction) -> Option<Action> {
         return Some(Action::Move(relative));
     }
   
-    // TODO: naming kinda sucks
-    let delta_outer = state.decorations.outer_gaps + state.decorations.border_size;
-    let delta_inner = state.decorations.inner_gaps + state.decorations.border_size;
-  
-    let x = client.top_left.0; // actual x + gap + border
-    let y = client.top_left.1; // actual y + gap + border
-    let w = client.width;
-    let h = client.height;
-    let monitor = state.find_monitor_by_client(&client).unwrap(); // not sure if it's possible
-                                                                  // to die here
-    let mw = monitor.width;
-    let mh = monitor.height;
-  
-    let mut flag = match direction {
-      // TODO: having bars will likely interfere as they reserve space.
-      // TODO: adding the outer gap for `Down` and `Left` is not exactly correct
-      // since the window may be surrounded by other windows and not "touch"
-      // the screen border, but it may still work out as gaps aren't usually THAT large. 
-      Direction::Down => y + h + delta_outer - mh, 
-      Direction::Up  => max(if y == delta_outer { // < 0 if there's no bar
-                  0                               // and dwindle:no_gaps_when_only is set
-                } else {
-                  y - delta_inner
-                }, 0),
-      Direction::Right => x + w + delta_outer - mw, 
-      Direction::Left => max(if x == delta_outer { // same as `Up`
-                  0
-                } else {
-                  x - delta_inner
-                }, 0),
-    };
-  
-    if flag == delta_outer { // `Down` and `Right` pseudofullscreen cases.
-      flag = 0;              // Not sure how to fix properly 🤷
-    }
-  
-    if flag != 0 {
+    if state.client_has_neighbours_in_direction(&client, &direction) {
       Some(Action::RenameMe(direction))
     } else {
       if can_move {
@@ -362,9 +328,6 @@ fn do_stuff(action: Action, cmd: &str) {
     Action::Move(direction) => {
         // TODO: separate logic for swap/moveto and focus/goto looks necessary
         // TODO: or next workspace is occupied
-//      if is_only && direction == 1 {
-//        None
-//      } else {
         match cmd {
           "swapwindow" => Some(dispatch::DispatchType::MoveToWorkspace(
             dispatch::WorkspaceIdentifierWithSpecial::Relative(direction), None)),
@@ -373,7 +336,6 @@ fn do_stuff(action: Action, cmd: &str) {
           //_ => panic!("Wrong dispatcher passed."),
           _ => None
         }
-//      }
     },
   };
   if let Some(disp) = dispatcher {
