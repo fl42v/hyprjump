@@ -1,4 +1,4 @@
-use hyprland::data::*;
+use hyprland::data as HData;
 use hyprland::dispatch::Direction;
 use hyprland::dispatch;
 use hyprland::keyword::{Keyword, OptionValue};
@@ -50,8 +50,96 @@ struct Decorations {
   border_size: i64
 }
 
+// ----------- Refactoring -----------------
+
+#[derive(Debug, Clone)]
+struct Client {
+  pid: i32, // since I'm kinda too lazy to compare `HData::Address`es if that's even possible
+  width: i16,
+  height: i16,
+  top_left: (/*x:*/ i16, /*y:*/ i16),
+  monitor: MonInfo,
+  is_floating: bool,
+  is_fullscreen: bool,
+  is_only: bool
+  // TODO: #1
+  //grouped: Vec<Box<Address>>
+}
+
+#[derive(Debug, Clone)]
+enum SmartGapsState {
+  Disabled,
+  NoBorder,
+  WithBorder
+}
+
+impl SmartGapsState {
+  // TODO: `Result`ify
+  fn get() -> Self {
+    match Keyword::get("dwindle:no_gaps_when_only").unwrap().value {
+      // DOCS: <C-f> no_gaps_when_only https://wiki.hyprland.org/hyprland-wiki/pages/Configuring/Dwindle-Layout/
+      OptionValue::Int(smart_gaps_state) => match smart_gaps_state {
+                                              0 => Self::Disabled,
+                                              1 => Self::NoBorder,
+                                              2 => Self::WithBorder,
+                                              _ => panic!("Currently impossible. New smart gaps state got introduced?")
+                                            },
+      _ => panic!("Unable to determine smart gaps state")
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+// TODO: rename NewDecorations to Decorations
+// when finished refactoring
+struct NewDecorations {
+  inner_gaps:  i16,
+  outer_gaps:  i16,
+  border_size: i16,
+  smart_gaps_state:  SmartGapsState
+}
+
+impl NewDecorations {
+  // TODO: `Result`ify
+  fn get() -> Self {
+    match (Keyword::get("general:gaps_in").unwrap().value,
+           Keyword::get("general:gaps_out").unwrap().value,
+           Keyword::get("general:border_size").unwrap().value) {
+      (OptionValue::Int(inner),
+       OptionValue::Int(outer),
+       OptionValue::Int(bordr)) => NewDecorations {
+                                     // kinda necessary to check for overflows,
+                                     // but the hyprland-rs lib uses `i16`s 
+                                     // for dimensions, and gaps that don't 
+                                     // fit it are kinda useless anyways
+                                     inner_gaps:  inner as i16,
+                                     outer_gaps:  outer as i16,
+                                     border_size: bordr as i16,
+                                     smart_gaps_state: SmartGapsState::get(),
+                                  },
+      _ => panic!("Some of (gaps_in, gaps_out, border_size) are not integers. This should never happen.")
+    }
+
+  }
+}
+
+#[derive(Debug, Clone)]
+struct Workspace {}
+
+#[derive(Debug, Clone)]
+struct State {
+  active_window_pid: i32,
+  active_workspace_id: i32,
+  clients: Vec<Client>,
+  workspaces: Vec<Workspace>,
+  decorations: NewDecorations,
+  is_vertical: bool
+}
+
+// -----------------------------------------
+
 fn get_monitor_info(id: i128) -> MonInfo {
-  let mon = Monitors::get().unwrap().find(|m| m.id == id).unwrap();
+  let mon = HData::Monitors::get().unwrap().find(|m| m.id == id).unwrap();
   MonInfo {
     width: mon.width,
     height: mon.height,
@@ -66,10 +154,10 @@ fn get_monitor_info(id: i128) -> MonInfo {
 // TODO: works incorrectly when the actual active window is on a special
 // Workspace since it does not count as active for some weird reason
 fn get_active_window() -> Option<ClientInfo> {
-  let active_workspace = Workspace::get_active().unwrap();
+  let active_workspace = HData::Workspace::get_active().unwrap();
   let last_window = active_workspace.last_window;
 
-  if let Some(client) = Clients::get().unwrap()
+  if let Some(client) = HData::Clients::get().unwrap()
     .find(|cl| cl.address.to_string() == last_window.to_string()) {
       Some(ClientInfo {
         width: client.size.0,
@@ -87,11 +175,11 @@ fn get_active_window() -> Option<ClientInfo> {
 }
 
 fn vertical_workspaces() -> bool {
-  let animations = Animations::get().unwrap();
+  let animations = HData::Animations::get().unwrap();
   if let Some(wsp_anim) = animations.0.iter().find(|anim| anim.name == "workspaces") {
     match &wsp_anim.style {
-      AnimationStyle::SlideVert | AnimationStyle::SlideFadeVert => true,
-      AnimationStyle::Unknown(s) => s.ends_with("vert"),
+      HData::AnimationStyle::SlideVert | HData::AnimationStyle::SlideFadeVert => true,
+      HData::AnimationStyle::Unknown(s) => s.ends_with("vert"),
       _ => false
     }
   } else {
