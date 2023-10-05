@@ -7,7 +7,6 @@ use hyprland;
 
 use std::cmp::max;
 
-
 #[derive(Debug, Clone)]
 enum Action {
   Move(i32),
@@ -20,50 +19,38 @@ enum Action {
   // remove it from the group. #1
 }
 
-#[derive(Debug, Clone)]
-struct MonInfo {
-  width: u16,
-  height: u16,
-  // TODO: multiple monitors setup #2
-  //x: i32,
-  //y: i32
-}
-
-#[derive(Debug, Clone)]
-struct ClientInfo {
-  width: i16,
-  height: i16,
-  x: i16,
-  y: i16,
-  monitor: MonInfo,
-  floating: bool,
-  fullscreen: bool,
-  is_only: bool
-  // TODO: #1
-  //grouped: Vec<Box<Address>>
-}
-
-#[derive(Debug, Clone)]
-struct Decorations {
-  inner_gaps: i64,
-  outer_gaps: i64,
-  border_size: i64
-}
-
-// ----------- Refactoring -----------------
+// ----------- Data gathering -----------------
+// TODO: move this shit to another file
 
 #[derive(Debug, Clone)]
 struct Client {
-  pid: i32, // since I'm kinda too lazy to compare `HData::Address`es if that's even possible
+  address: String,
   width: i16,
   height: i16,
   top_left: (/*x:*/ i16, /*y:*/ i16),
-  monitor: MonInfo,
+  monitor: i16,
   is_floating: bool,
   is_fullscreen: bool,
-  is_only: bool
+  workspace_id: i16,
   // TODO: #1
-  //grouped: Vec<Box<Address>>
+  // requires rewriting to use `Address`es
+  // grouped: Vec<Box<Address>>
+}
+
+impl From<&HData::Client> for Client {
+  fn from(client: &HData::Client) -> Client {
+    Client {
+      address: client.address.to_string(),
+      width: client.size.0,
+      height: client.size.1,
+      top_left: client.at,
+      monitor: client.monitor as i16,
+      is_floating: client.floating,
+      is_fullscreen: client.fullscreen,
+      workspace_id: client.workspace.id as i16 // like seriously, [-32_768..32_767]
+                                               // is more than enough
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -124,89 +111,174 @@ impl NewDecorations {
 }
 
 #[derive(Debug, Clone)]
-struct Workspace {}
+struct Workspace {
+  id: i16,
+  client_addresses: Vec<String>,
+  monitor_id: i16
+}
+
+impl Workspace {
+  // I suspenct you can't pass additional parameters to `from()`
+  fn wrap(workspace: &HData::Workspace, clients: &Vec<Client>, monitors: &Vec<Monitor>) -> Self {
+    Self {
+      id: workspace.id as i16,
+      client_addresses: clients.iter()
+                    .filter(|c| c.workspace_id == workspace.id as i16)
+                    .map(|c| c.address.to_string())
+                    .collect(),
+      monitor_id: monitors.iter()
+                    .filter(|m| m.name ==  workspace.monitor)
+                    .collect::<Vec<_>>()[0]
+                    .id as i16
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+struct Monitor {
+ id: i16,
+ name: String,
+ width: i16,
+ height: i16,
+ x: i16,
+ y: i16,
+ active_workspace_id: i16,
+ //possibly fixes the issue with bars:
+ //reserved: (u16, u16, u16, u16),
+}
+
+impl From<&HData::Monitor> for Monitor {
+  fn from(monitor: &HData::Monitor) -> Monitor {
+    Monitor {
+     id: monitor.id as i16,
+     name: monitor.name.clone(),
+     width: monitor.width as i16,
+     height: monitor.height as i16,
+     x: monitor.x as i16,
+     y: monitor.y as i16,
+     active_workspace_id: monitor.active_workspace.id as i16,
+    }
+  }
+}
+
 
 #[derive(Debug, Clone)]
 struct State {
-  active_window_pid: i32,
-  active_workspace_id: i32,
+  active_window_address: String, // tecnhically can be 0x0,
+                                 // in which case search returns nothing
+  active_workspace_id: i16,
   clients: Vec<Client>,
   workspaces: Vec<Workspace>,
+  monitors: Vec<Monitor>,
   decorations: NewDecorations,
   is_vertical: bool
 }
 
+impl State {
+  fn new() -> Self {
+    let clients = HData::Clients::get()
+      .expect("Unable to obtain the list of clients")
+      .to_vec();
+    let clients: Vec<Client> = clients.iter()
+      .map(|c| Client::from(c))
+      .filter(|c| c.workspace_id > 0) // #3
+      .collect();
+
+    let monitors = HData::Monitors::get()
+      .expect("Unable to obtain the list of monitors")
+      .to_vec();
+    let monitors: Vec<Monitor> = monitors.iter()
+      .map(|m| Monitor::from(m))
+      .collect();
+
+    let workspaces = HData::Workspaces::get()
+      .expect("Unable to obtain the list of workspaces")
+      .to_vec();
+    let workspaces: Vec<Workspace> = workspaces.iter()
+      .map(|w| Workspace::wrap(w, &clients, &monitors))
+      .filter(|w| w.id > 0) // TODO: because of reasons? #3
+      .collect();
+
+    // a workaround, since Client::get_active() doesn't seem to work :/
+    // TODO: works incorrectly when the actual active window is on a special
+    // Workspace since it does not count as active for some weird reason
+    let active_workspace = HData::Workspace::get_active().unwrap();
+
+    let animations = HData::Animations::get().unwrap();
+    let is_vertical = if let Some(wsp_anim) = animations.0.iter()
+                                                .find(|anim| anim.name == "workspaces") {
+      match &wsp_anim.style {
+        HData::AnimationStyle::SlideVert | HData::AnimationStyle::SlideFadeVert => true,
+        HData::AnimationStyle::Unknown(s) => s.ends_with("vert"),
+        _ => false
+      }
+    } else {
+      false
+    };
+
+    Self {
+      active_window_address: active_workspace.last_window.to_string(),
+      active_workspace_id: active_workspace.id as i16,
+      clients: clients,
+      workspaces: workspaces,
+      monitors: monitors,
+      decorations: NewDecorations::get(),
+      is_vertical: is_vertical
+    }
+  }
+
+  fn find_workspace_by_id(workspaces: &Vec<Workspace>, id: i16) -> Option<&Workspace> {
+    let workspaces: Vec<&Workspace> = workspaces
+                                        .iter()
+                                        .filter(|w| w.id == id)
+                                        .collect();
+    if workspaces.len() != 1 {
+      None
+    } else {
+      Some(workspaces[0])
+    }
+  }
+
+  fn correct_dimensions(&mut self) {
+    // TODO: account for SmartGapsState.
+    // Also, that's incorrect: choosing
+    // inner or outer gaps depends
+    // on the position of the window
+    let delta_position = self.decorations.outer_gaps + self.decorations.border_size;
+    let delta_size = self.decorations.inner_gaps + delta_position;
+
+    self.clients
+         .iter_mut()
+         .for_each(|c| {
+           if let Some(workspace) = State::find_workspace_by_id(&self.workspaces, c.workspace_id) {
+             if workspace.client_addresses.len() > 1 {
+               c.top_left.0 -= delta_position;
+               c.top_left.1 -= delta_position;
+               c.width += delta_size;
+               c.height += delta_size;
+             }
+           };
+         });
+  }
+
+  fn find_window_by_address(&self, address: &String) -> Option <&Client> {
+    self.clients
+      .iter()
+      .find(|&c| &c.address == address)
+  }
+
+  fn find_monitor_by_client(&self, client: &Client) -> Option <&Monitor> {
+    self.monitors
+      .iter()
+      .find(|&m| m.id == client.monitor)
+  }
+}
+
 // -----------------------------------------
 
-fn get_monitor_info(id: i128) -> MonInfo {
-  let mon = HData::Monitors::get().unwrap().find(|m| m.id == id).unwrap();
-  MonInfo {
-    width: mon.width,
-    height: mon.height,
-    // #2
-    //x: mon.x,
-    //y: mon.y
-  }
-}
-
-
-// a workaround, since Client::get_active() doesn't seem to work :/
-// TODO: works incorrectly when the actual active window is on a special
-// Workspace since it does not count as active for some weird reason
-fn get_active_window() -> Option<ClientInfo> {
-  let active_workspace = HData::Workspace::get_active().unwrap();
-  let last_window = active_workspace.last_window;
-
-  if let Some(client) = HData::Clients::get().unwrap()
-    .find(|cl| cl.address.to_string() == last_window.to_string()) {
-      Some(ClientInfo {
-        width: client.size.0,
-        height: client.size.1,
-        x: client.at.0,
-        y: client.at.1,
-        monitor: get_monitor_info(client.monitor),
-        floating: client.floating,
-        fullscreen: client.fullscreen,
-        is_only: (active_workspace.windows == 1)
-      })
-  } else {
-    None
-  }
-}
-
-fn vertical_workspaces() -> bool {
-  let animations = HData::Animations::get().unwrap();
-  if let Some(wsp_anim) = animations.0.iter().find(|anim| anim.name == "workspaces") {
-    match &wsp_anim.style {
-      HData::AnimationStyle::SlideVert | HData::AnimationStyle::SlideFadeVert => true,
-      HData::AnimationStyle::Unknown(s) => s.ends_with("vert"),
-      _ => false
-    }
-  } else {
-    false
-  }
-}
-
-fn get_decorations() -> Decorations { 
-  // TODO: is it possible some of them are not specified?
-  // TODO: error handling
-  match (Keyword::get("general:gaps_in").unwrap().value,
-      Keyword::get("general:gaps_out").unwrap().value,
-      Keyword::get("general:border_size").unwrap().value) {
-    (OptionValue::Int(inner),
-     OptionValue::Int(outer),
-     OptionValue::Int(bordr)) => Decorations {
-                      inner_gaps:  inner as i64,
-                      outer_gaps:  outer as i64,
-                      border_size: bordr as i64
-                   },
-    _ => panic!("Some of (gaps_in, gaps_out, border_size) are not integers. This should never happen.")
-  }
-}
-
 // TODO: TF it even means? RENAME!
-fn relative_direction(direction: &Direction) -> (bool, i32) {
-  let is_vert = vertical_workspaces();
+fn relative_direction(state: &State, direction: &Direction) -> (bool, i32) {
+  let is_vert = state.is_vertical;
 
   match direction {
       Direction::Up    =>  (is_vert, -1),
@@ -216,51 +288,73 @@ fn relative_direction(direction: &Direction) -> (bool, i32) {
   }
 }
 
-fn determine_action(client: &ClientInfo, direction: Direction) -> Option<Action> {
+fn determine_action(state: &State, direction: Direction) -> Option<Action> {
+  // TODO: fails if a certain non-floating window
+  // has no border. Parse window rules?
 
-  let (can_move, relative) = relative_direction(&direction);
+  let (can_move, relative) = relative_direction(&state, &direction);
 
   // TODO: Focusing a floating window from a tiled still does not work.
-  if can_move && (client.floating || client.fullscreen) {
-      return Some(Action::Move(relative));
-  }
-
-  // TODO: mixing one/two letter aliases with full names kinda sucks
-  let x = client.x   as i64; // actual x + gap + border
-  let y = client.y   as i64; // actual y + gap + border
-  let w = client.width as i64;
-  let h = client.height as i64;
-  let mw = client.monitor.width as i64;
-  let mh = client.monitor.height as i64;
-  let decorations = get_decorations();
-
-  let mut flag = match direction {
-    // TODO: having bars will likely interfere as they reserve space.
-    // TODO: adding the outer gap for `Down` and `Left` is not exactly correct
-    // since the window may be surrounded by other windows and not "touch"
-    // the screen border, but it may still work out as gaps aren't usually THAT large. 
-    Direction::Down => y + h + decorations.outer_gaps + decorations.border_size - mh, 
-    Direction::Up  => max(if y == decorations.outer_gaps + decorations.border_size { // < 0 if there's no bar
-                0                                                                    // and dwindle:no_gaps_when_only is set
-              } else {
-                y - decorations.inner_gaps - decorations.border_size
-              }, 0),
-    Direction::Right => x + w + decorations.outer_gaps + decorations.border_size - mw, 
-    Direction::Left => max(if x == decorations.outer_gaps + decorations.border_size { // same as `Up`
-                0
-              } else {
-                x - decorations.inner_gaps - decorations.border_size
-              }, 0),
-  };
-
-  if flag == decorations.outer_gaps + decorations.border_size { // `Down` and `Right` pseudofullscreen cases.
-    flag = 0;                                                   // Not sure how to fix properly 🤷
-  }
-
-  if flag != 0 {
-    Some(Action::RenameMe(direction))
+  if let Some(client) = state.find_window_by_address(&state.active_window_address) {
+  
+    if can_move && (client.is_floating || client.is_fullscreen) {
+        return Some(Action::Move(relative));
+    }
+  
+    // TODO: naming kinda sucks
+    let delta_outer = state.decorations.outer_gaps + state.decorations.border_size;
+    let delta_inner = state.decorations.inner_gaps + state.decorations.border_size;
+  
+    let x = client.top_left.0; // actual x + gap + border
+    let y = client.top_left.1; // actual y + gap + border
+    let w = client.width;
+    let h = client.height;
+    let monitor = state.find_monitor_by_client(&client).unwrap(); // not sure if it's possible
+                                                                  // to die here
+    let mw = monitor.width;
+    let mh = monitor.height;
+  
+    let mut flag = match direction {
+      // TODO: having bars will likely interfere as they reserve space.
+      // TODO: adding the outer gap for `Down` and `Left` is not exactly correct
+      // since the window may be surrounded by other windows and not "touch"
+      // the screen border, but it may still work out as gaps aren't usually THAT large. 
+      Direction::Down => y + h + delta_outer - mh, 
+      Direction::Up  => max(if y == delta_outer { // < 0 if there's no bar
+                  0                               // and dwindle:no_gaps_when_only is set
+                } else {
+                  y - delta_inner
+                }, 0),
+      Direction::Right => x + w + delta_outer - mw, 
+      Direction::Left => max(if x == delta_outer { // same as `Up`
+                  0
+                } else {
+                  x - delta_inner
+                }, 0),
+    };
+  
+    if flag == delta_outer { // `Down` and `Right` pseudofullscreen cases.
+      flag = 0;              // Not sure how to fix properly 🤷
+    }
+  
+    if flag != 0 {
+      Some(Action::RenameMe(direction))
+    } else {
+      if can_move {
+        Some(Action::Move(relative))
+      } else {
+        None
+      }
+    }
   } else {
-    if can_move {
+    // whatever to do when there's no active client
+
+    // TODO: allowing the previous workspace only is ~~most likely~~ incorrect
+    // as long as it's possible to travel through workspaces by number.
+    // Already: this check doesn't account for the ability to move the only window 
+    // on the workspace to the next one
+
+    if can_move && relative == -1 {
       Some(Action::Move(relative))
     } else {
       None
@@ -268,7 +362,7 @@ fn determine_action(client: &ClientInfo, direction: Direction) -> Option<Action>
   }
 }
 
-fn do_stuff(action: Action, cmd: &str, is_only: bool) {
+fn do_stuff(action: Action, cmd: &str) {
   let dir; // to store an otherwise temporary value. TODO: Looks like crap. Avoidable?
   let dispatcher = match action {
     Action::RenameMe(direction) => {
@@ -276,8 +370,8 @@ fn do_stuff(action: Action, cmd: &str, is_only: bool) {
       Some(dispatch::DispatchType::Custom(cmd, &dir))
     },
     Action::Move(direction) => {
-// TODO: separate logick for swap/moveto and focus/goto looks necessary
-// TODO: or next workspace is occupied
+        // TODO: separate logic for swap/moveto and focus/goto looks necessary
+        // TODO: or next workspace is occupied
 //      if is_only && direction == 1 {
 //        None
 //      } else {
@@ -298,6 +392,8 @@ fn do_stuff(action: Action, cmd: &str, is_only: bool) {
 }
 
 fn main() -> hyprland::Result<()> {
+  let state = State::new();
+
   // TODO: clap
   let cmd = std::env::args().nth(1).expect("Dispatcher not specified. Expected either swapwindow or movefocus");
   let arg    = std::env::args().nth(2).expect("No directions given. Expected one of r,d,u,l");
@@ -309,21 +405,10 @@ fn main() -> hyprland::Result<()> {
     _ => panic!("Wrong direction given. Correct are: r,d,u,l")
   };
 
-
-  if let Some(active_window) = get_active_window() {
-    if let Some(action) = determine_action(&active_window, direction) {
-        do_stuff(action, &cmd, active_window.is_only);
-    };
-  } else {
-    let (can_move, relative) = relative_direction(&direction);
-    // TODO: allowing the previous workspace only is ~~most likely~~ incorrect
-    // as long as it's possible to travel through workspaces by number.
-    // Already: this check doesn't account for the ability to move the only window 
-    // on the workspace to the next one
-    if can_move && relative == -1 {
-      do_stuff(Action::Move(relative), &cmd, true);
-    }
-  }
+  // tbh, can move now
+  if let Some(action) = determine_action(&state, direction) {
+    do_stuff(action, &cmd);
+  };
 
   Ok(())
 }
