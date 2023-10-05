@@ -9,7 +9,7 @@ you go to the previous workspace instead. Likewise, attempting to swap the leftm
 with that to the left will move it to the previous workspace.
 
 # Installation
-- There's an untested flake for nixos (currently I'm building from a local copy to avoid the hustle of constant `git push`es).
+- Once it works, there'll be a nix flake (currently a template);
 - Otherwise, it's just `cargo build` and pointing to the target binary from the configuration.
 
 # Configuration
