@@ -9,7 +9,7 @@ you go to the previous workspace instead. Likewise, attempting to swap the leftm
 with that to the left will move it to the previous workspace.
 
 # Demo
-![](assets/demo.gif)
+[![](assets/demo.gif)](https://raw.githubusercontent.com/fl42v/hyprspace/main/assets/demo.mp4)
 
 # Installation
 - Once it works, there'll be a nix flake (currently a template);
