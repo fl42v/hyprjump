@@ -8,6 +8,9 @@ if you're trying to, for example, focus the window to the left of the leftmost w
 you go to the previous workspace instead. Likewise, attempting to swap the leftmost window
 with that to the left will move it to the previous workspace.
 
+# Demo
+![](assets/demo.gif)
+
 # Installation
 - Once it works, there'll be a nix flake (currently a template);
 - Otherwise, it's just `cargo build` and pointing to the target binary from the configuration.
