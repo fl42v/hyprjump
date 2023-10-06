@@ -260,11 +260,19 @@ impl State {
 
   fn client_has_neighbours_in_direction(&self, client: &Client, direction: &Direction) -> bool {
     let neighbours = self.find_clients_on_workspace(client.workspace_id);
+    // TODO: also selects the diagonal neighbours; check 2 dimensions instead
+    // xxxx yyyy   x -> down = z (actually y, but that's another story)
+    // xxxx yyyy
+    // xxxx
+    // xxxx zzzz
+    // xxxx zzzz
     let neighbour = neighbours
                     .iter()
                     .find(|&n| match direction {
                                  Direction::Up    => n.top_left.1 < client.top_left.1,
-                                 Direction::Down  => n.top_left.1 > client.top_left.1,
+                                 Direction::Down  => n.top_left.1 > client.top_left.1 && 
+                                     n.top_left.0 <= client.top_left.0 &&
+                                     n.top_left.0 + n.width >= client.top_left.0 + client.width,
                                  Direction::Left  => n.top_left.0 < client.top_left.0,
                                  Direction::Right => n.top_left.0 > client.top_left.0,
                                }
