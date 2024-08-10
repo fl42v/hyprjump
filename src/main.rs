@@ -17,6 +17,7 @@ enum Action {
   // should create a new group, and moving from an edge of said
   // group towards an edge of the workspace (monitor) sould 
   // remove it from the group. #1
+  // checkout swapgroup dispatcher
 }
 
 // ----------- Data gathering -----------------
@@ -53,62 +54,6 @@ impl From<&HData::Client> for Client {
   }
 }
 
-#[derive(Debug, Clone)]
-enum SmartGapsState {
-  Disabled,
-  NoBorder,
-  WithBorder
-}
-
-impl SmartGapsState {
-  // TODO: `Result`ify
-  fn get() -> Self {
-    match Keyword::get("dwindle:no_gaps_when_only").unwrap().value {
-      // DOCS: <C-f> no_gaps_when_only https://wiki.hyprland.org/hyprland-wiki/pages/Configuring/Dwindle-Layout/
-      OptionValue::Int(smart_gaps_state) => match smart_gaps_state {
-                                              0 => Self::Disabled,
-                                              1 => Self::NoBorder,
-                                              2 => Self::WithBorder,
-                                              _ => panic!("Currently impossible. New smart gaps state got introduced?")
-                                            },
-      _ => panic!("Unable to determine smart gaps state")
-    }
-  }
-}
-
-#[derive(Debug, Clone)]
-// TODO: rename NewDecorations to Decorations
-// when finished refactoring
-struct NewDecorations {
-  inner_gaps:  i16,
-  outer_gaps:  i16,
-  border_size: i16,
-  smart_gaps_state:  SmartGapsState
-}
-
-impl NewDecorations {
-  // TODO: `Result`ify
-  fn get() -> Self {
-    match (Keyword::get("general:gaps_in").unwrap().value,
-           Keyword::get("general:gaps_out").unwrap().value,
-           Keyword::get("general:border_size").unwrap().value) {
-      (OptionValue::Int(inner),
-       OptionValue::Int(outer),
-       OptionValue::Int(bordr)) => NewDecorations {
-                                     // kinda necessary to check for overflows,
-                                     // but the hyprland-rs lib uses `i16`s 
-                                     // for dimensions, and gaps that don't 
-                                     // fit it are kinda useless anyways
-                                     inner_gaps:  inner as i16,
-                                     outer_gaps:  outer as i16,
-                                     border_size: bordr as i16,
-                                     smart_gaps_state: SmartGapsState::get(),
-                                  },
-      _ => panic!("Some of (gaps_in, gaps_out, border_size) are not integers. This should never happen.")
-    }
-
-  }
-}
 
 #[derive(Debug, Clone)]
 struct Workspace {
@@ -167,10 +112,10 @@ struct State {
   active_window_address: String, // tecnhically can be 0x0,
                                  // in which case search returns nothing
   active_workspace_id: i16,
+  active_monitor_whatever_the_fuck_it_is: String,
   clients: Vec<Client>,
   workspaces: Vec<Workspace>,
   monitors: Vec<Monitor>,
-  decorations: NewDecorations,
   is_vertical: bool
 }
 
@@ -203,6 +148,7 @@ impl State {
     // TODO: works incorrectly when the actual active window is on a special
     // Workspace since it does not count as active for some weird reason
     let active_workspace = HData::Workspace::get_active().unwrap();
+    dbg!(&active_workspace);
 
     let animations = HData::Animations::get().unwrap();
     let is_vertical = if let Some(wsp_anim) = animations.0.iter()
@@ -222,14 +168,16 @@ impl State {
       clients: clients,
       workspaces: workspaces,
       monitors: monitors,
-      decorations: NewDecorations::get(),
-      is_vertical: is_vertical
+      is_vertical: is_vertical,
+
+      active_monitor_whatever_the_fuck_it_is: active_workspace.monitor
     }
   }
 
   fn find_workspace_by_id(workspaces: &Vec<Workspace>, id: i16) -> Option<&Workspace> {
     let workspaces: Vec<&Workspace> = workspaces
                                         .iter()
+                                        // does it copy, tho?
                                         .filter(|w| w.id == id)
                                         .collect();
     if workspaces.len() != 1 {
@@ -237,6 +185,25 @@ impl State {
     } else {
       Some(workspaces[0])
     }
+  }
+
+  fn next_monitor_in_the_direction(&self, direction: &Direction) -> Option<&Monitor> {
+      // likely wouldn't work for esoteric setups
+      //let active = 
+
+      let monitors: Vec<&Monitor> = self.monitors.iter()
+                                            .filter(|m| match direction {
+                                                          // compare to that of active
+                                                          // monitor; consider moving the match
+                                                          // outside of the filter
+                                                          Direction::Up    => m.x > 5,
+                                                          Direction::Down  => m.x > 5,
+                                                          Direction::Left  => m.y > 5,
+                                                          Direction::Right => m.y > 5,
+                                                        }
+                                                   )
+                                            .collect();
+      None
   }
 
   fn find_window_by_address(&self, address: &String) -> Option <&Client> {
@@ -258,7 +225,10 @@ impl State {
       .find(|&m| m.id == client.monitor)
   }
 
+  // sometimes (when?) doesn't work
   fn client_has_neighbours_in_direction(&self, client: &Client, direction: &Direction) -> bool {
+    // would've been more logical to return the next window, but we can't swap
+    // 2 given windows anyways; make a plugin?
     let neighbours = self.find_clients_on_workspace(client.workspace_id);
     let neighbour = neighbours
                     .iter()
