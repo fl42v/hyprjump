@@ -102,6 +102,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
+name = "hyprjump"
+version = "0.1.0"
+dependencies = [
+ "hyprland",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hyprland"
 version = "0.4.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -128,15 +137,6 @@ checksum = "5dd8ce4c182ce77e485918f49262425ee51a2746fe97f14084869aeff2fbc38e"
 dependencies = [
  "quote",
  "syn",
-]
-
-[[package]]
-name = "hyprspace"
-version = "0.1.0"
-dependencies = [
- "hyprland",
- "serde",
- "serde_json",
 ]
 
 [[package]]
