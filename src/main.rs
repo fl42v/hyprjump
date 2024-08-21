@@ -46,7 +46,10 @@ impl From<&HData::Client> for Client {
             top_left: client.at,
             monitor: client.monitor as i16,
             is_floating: client.floating,
-            is_fullscreen: client.fullscreen,
+            is_fullscreen: match client.fullscreen {
+                HData::FullscreenMode::None => false,
+                _ => true,
+            },
             workspace_id: client.workspace.id as i16, // like seriously, [-32_768..32_767]
                                                       // is more than enough
         }
